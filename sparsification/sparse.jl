@@ -1,5 +1,5 @@
 using Flux, Metalhead, Statistics
-using Flux.Tracker: back!, update!, grad
+using Flux.Tracker: back!, update!, grad, extract_grad!, data
 using Flux: onehotbatch, onecold, crossentropy, throttle, loadparams!
 using Metalhead: trainimgs
 using Images: channelview
@@ -65,17 +65,24 @@ opt = Descent(0.1)
 
 #Unspecific Bounded Insensitivity
 function unspecific(d, lambda)
-    l = loss(d...)
-    back!(l)
     output = m(d[1])
-    for o in output
-        grads = sum.(abs.(Tracker.gradient(() -> o, params(m))))
+    back!(output[1], once=false)
+    gs = data.(extract_grad!.(params(m)))
+    gs = map(x -> abs.(x), gs)
+    for o = 2:length(output)
+        back!(output[o], once=false)
+        grads = data.(extract_grad!.(params(m)))
+        grads = map(x -> abs.(x), grads)
+        gs = gs .+ grads
     end
 
-    grads = 1/length(output) .* grads         #Sensitivity
-    grads = max(0, 1 .- grads)                #Unspecific bounded Insensitivity
-    grads = grads .* params(m)
-    grads = grads .* lambda
+    l = loss(d...)
+    back!(l)
+
+    gs = 1/length(output) .* gs         #Sensitivity
+    gs = max(0, 1 .- gs)                #Unspecific bounded Insensitivity
+    gs = gs .* params(m)
+    gs = gs .* lambda
 
     for p in params(m)
         Δ = -apply!(opt, p, data(grad(p)))
@@ -86,18 +93,32 @@ end
 
 #Specific Bounded Insensitivity
 function specific(d, lambda)
-    l = loss(d...)
-    back!(l)
     output = m(d[1])
+    reqd_index = 0
     for o = 1:length(output)
-        if d[2][o]
-            grads = sum.(abs.(Tracker.gradient(() -> output[o], params(m))))
+        if d[2][o]:
+            reqd_index = o
+            break
         end
     end
+    back!(output[reqd_index], once=false)
+    gs = data.(extract_grad!.(params(m)))
+    gs = map(x -> abs.(x), gs)
+    for o = reqd_index:length(output)
+        if d[2][o]
+            back!(output[o], once=false)
+            grads = data.(extract_grad!.(params(m)))
+            grads = map(x -> abs.(x), grads)
+            gs = gs .+ grads
+        end
+    end    
 
-    grads = max(0, 1 .- grads)                  #Specific bounded Insensitivity
-    grads = grads .* params(m)
-    grads = grads .* lambda
+    l = loss(d...)
+    back!(l)
+
+    gs = max(0, 1 .- gs)                  #Specific bounded Insensitivity
+    gs = gs .* params(m)
+    gs = gs .* lambda
 
     for p in params(m)
         Δ = -apply!(opt, p, data(grad(p)))
@@ -107,8 +128,8 @@ function specific(d, lambda)
 end
 
 
-for d in train
+```for d in train
     unspecific(d, lambda)
     #specific(d, lambda)
     #Thresholding value to actual zero
-end
+end```
